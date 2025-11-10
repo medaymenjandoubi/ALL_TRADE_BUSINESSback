@@ -121,76 +121,140 @@ exports.verifyOtp=async(req,res)=>{
     }
 }
 
-exports.resendOtp=async(req,res)=>{
-    try {
-        console.log('Email:', process.env.EMAIL);
-console.log('Password:', process.env.PASSWORD);
+exports.resendOtp = async (req, res) => {
+  try {
+    const existingUser = await User.findById(req.body.user);
 
-        const existingUser=await User.findById(req.body.user)
-
-        if(!existingUser){
-            return res.status(404).json({"message":"User not found"})
-        }
-
-        await Otp.deleteMany({user:existingUser._id})
-
-        const otp=generateOTP()
-        const hashedOtp=await bcrypt.hash(otp,10)
-
-        const newOtp=new Otp({user:req.body.user,otp:hashedOtp,expiresAt:Date.now()+parseInt(process.env.OTP_EXPIRATION_TIME)})
-        await newOtp.save()
-
-        await sendMail(existingUser.email,`OTP Verification for Your MERN-AUTH-REDUX-TOOLKIT Account`,`Your One-Time Password (OTP) for account verification is: <b>${otp}</b>.</br>Do not share this OTP with anyone for security reasons`)
-
-        res.status(201).json({'message':"OTP sent"})
-    } catch (error) {
-        res.status(500).json({'message':"Some error occured while resending otp, please try again later"})
-        console.log(error);
+    if (!existingUser) {
+      return res.status(404).json({ message: "Utilisateur introuvable" });
     }
-}
 
-exports.forgotPassword=async(req,res)=>{
-    let newToken;
-    try {
-        // checks if user provided email exists or not
-        const isExistingUser=await User.findOne({email:req.body.email})
+    // Supprimer les anciens OTP du même utilisateur
+    await Otp.deleteMany({ user: existingUser._id });
 
-        // if email does not exists returns a 404 response
-        if(!isExistingUser){
-            return res.status(404).json({message:"Provided email does not exists"})
-        }
+    // Générer et chiffrer un nouvel OTP
+    const otp = generateOTP();
+    const hashedOtp = await bcrypt.hash(otp, 10);
 
-        await PasswordResetToken.deleteMany({user:isExistingUser._id})
+    // Sauvegarder le nouvel OTP
+    const newOtp = new Otp({
+      user: req.body.user,
+      otp: hashedOtp,
+      expiresAt: Date.now() + parseInt(process.env.OTP_EXPIRATION_TIME),
+    });
+    await newOtp.save();
 
-        // if user exists , generates a password reset token
-        const passwordResetToken=generateToken(sanitizeUser(isExistingUser),true)
+    // 📨 Email HTML personnalisé pour ALL TRADE BUSINESS
+    const subject = "🔐 Code de vérification – ALL TRADE BUSINESS";
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 30px;">
+        <div style="max-width: 600px; margin: auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+          <div style="background-color: #AA9139; color: white; text-align: center; padding: 16px 0;">
+            <h2 style="margin: 0;">ALL TRADE BUSINESS</h2>
+          </div>
+          <div style="padding: 24px; color: #333;">
+            <h3>Bonjour ${existingUser.name || "cher utilisateur"},</h3>
+            <p>Voici votre code de vérification à usage unique (OTP) pour accéder à votre compte :</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <span style="display: inline-block; background-color: #2B4A6F; color: white; font-size: 24px; font-weight: bold; padding: 12px 24px; border-radius: 6px;">
+                ${otp}
+              </span>
+            </div>
+            <p style="margin-top: 20px;">⚠️ Ce code expirera dans <b>${parseInt(process.env.OTP_EXPIRATION_TIME) / 60000} minutes</b>.</p>
+            <p>Ne partagez jamais ce code avec qui que ce soit pour des raisons de sécurité.</p>
+            <p style="margin-top: 30px;">Cordialement,<br><b>L’équipe ALL TRADE BUSINESS</b></p>
+          </div>
+          <div style="background-color: #f1f1f1; text-align: center; padding: 10px; font-size: 12px; color: #666;">
+            © ${new Date().getFullYear()} ALL TRADE BUSINESS – Tous droits réservés.
+          </div>
+        </div>
+      </div>
+    `;
 
-        // hashes the token
-        const hashedToken=await bcrypt.hash(passwordResetToken,10)
+    await sendMail(
+      existingUser.email,
+      subject,
+      htmlContent
+    );
 
-        // saves hashed token in passwordResetToken collection
-        newToken=new PasswordResetToken({user:isExistingUser._id,token:hashedToken,expiresAt:Date.now() + parseInt(process.env.OTP_EXPIRATION_TIME)})
-        await newToken.save()
+    res.status(201).json({ message: "OTP envoyé avec succès" });
+  } catch (error) {
+    console.error(error);
+    res
+      .status(500)
+      .json({ message: "Une erreur est survenue, veuillez réessayer plus tard." });
+  }
+};
 
-        // sends the password reset link to the user's mail
-        await sendMail(isExistingUser.email,'Password Reset Link for Your MERN-AUTH-REDUX-TOOLKIT Account',`<p>Dear ${isExistingUser.name},
 
-        We received a request to reset the password for your MERN-AUTH-REDUX-TOOLKIT account. If you initiated this request, please use the following link to reset your password:</p>
-        
-        <p><a href=${process.env.ORIGIN}/reset-password/${isExistingUser._id}/${passwordResetToken} target="_blank">Reset Password</a></p>
-        
-        <p>This link is valid for a limited time. If you did not request a password reset, please ignore this email. Your account security is important to us.
-        
-        Thank you,
-        The MERN-AUTH-REDUX-TOOLKIT Team</p>`)
+exports.forgotPassword = async (req, res) => {
+  let newToken;
+  try {
+    // Vérifie si l'utilisateur existe
+    const isExistingUser = await User.findOne({ email: req.body.email });
 
-        res.status(200).json({message:`Password Reset link sent to ${isExistingUser.email}`})
-
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({message:'Error occured while sending password reset mail'})
+    if (!isExistingUser) {
+      return res.status(404).json({ message: "Aucun compte associé à cet email" });
     }
-}
+
+    // Supprime les anciens tokens de réinitialisation
+    await PasswordResetToken.deleteMany({ user: isExistingUser._id });
+
+    // Génère un nouveau token
+    const passwordResetToken = generateToken(sanitizeUser(isExistingUser), true);
+    const hashedToken = await bcrypt.hash(passwordResetToken, 10);
+
+    // Sauvegarde du nouveau token
+    newToken = new PasswordResetToken({
+      user: isExistingUser._id,
+      token: hashedToken,
+      expiresAt: Date.now() + parseInt(process.env.OTP_EXPIRATION_TIME),
+    });
+    await newToken.save();
+
+    // 📨 Email HTML personnalisé ALL TRADE BUSINESS
+    const subject = "🔐 Réinitialisation de votre mot de passe – ALL TRADE BUSINESS";
+    const resetLink = `${process.env.ORIGIN}/reset-password/${isExistingUser._id}/${passwordResetToken}`;
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 30px;">
+        <div style="max-width: 600px; margin: auto; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+          <div style="background-color: #AA9139; color: white; text-align: center; padding: 16px 0;">
+            <h2 style="margin: 0;">ALL TRADE BUSINESS</h2>
+          </div>
+          <div style="padding: 24px; color: #333;">
+            <h3>Bonjour ${isExistingUser.name || "cher utilisateur"},</h3>
+            <p>Nous avons reçu une demande de réinitialisation de mot de passe pour votre compte <b>ALL TRADE BUSINESS</b>.</p>
+            <p>Si vous êtes à l’origine de cette demande, cliquez sur le bouton ci-dessous pour définir un nouveau mot de passe :</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${resetLink}" target="_blank"
+                style="display: inline-block; background-color: #2B4A6F; color: #fff; text-decoration: none; font-weight: bold; padding: 12px 24px; border-radius: 6px;">
+                🔁 Réinitialiser mon mot de passe
+              </a>
+            </div>
+            <p>Ce lien est valable pendant <b>${parseInt(process.env.OTP_EXPIRATION_TIME) / 60000} minutes</b>.</p>
+            <p>Si vous n’avez pas demandé de réinitialisation, ignorez simplement cet email. Votre compte restera sécurisé.</p>
+            <p style="margin-top: 30px;">Cordialement,<br><b>L’équipe ALL TRADE BUSINESS</b></p>
+          </div>
+          <div style="background-color: #f1f1f1; text-align: center; padding: 10px; font-size: 12px; color: #666;">
+            © ${new Date().getFullYear()} ALL TRADE BUSINESS – Tous droits réservés.
+          </div>
+        </div>
+      </div>
+    `;
+
+    await sendMail(isExistingUser.email, subject, htmlContent);
+
+    res.status(200).json({
+      message: `Lien de réinitialisation envoyé à ${isExistingUser.email}`,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Une erreur est survenue lors de l’envoi du mail de réinitialisation.",
+    });
+  }
+};
+
 
 exports.resetPassword=async(req,res)=>{
     try {
